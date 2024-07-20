@@ -11,10 +11,12 @@ from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.utils import class_weight
+from sklearn.preprocessing import StandardScaler
+
 
 # Global variables for image dimensions
-IMG_SHAPE1 = 150
-IMG_SHAPE2 = 200
+IMG_SHAPE1 = 500
+IMG_SHAPE2 = 60
 
 # Load data
 data_dir = '../data'
@@ -38,15 +40,15 @@ reshaped_test = test_features.reshape(number_of_test_data_points, IMG_SHAPE1, IM
 # Split the data into training and validation sets
 X_train, X_val, y_train, y_val = train_test_split(reshaped_features, labels, test_size=0.2, random_state=42)
 
-# Normalize the pixel values
-X_train = X_train / 255.0
-X_val = X_val / 255.0
-X_test = reshaped_test / 255.0
+# [THIS IS SOMEHOW SUCKS]Normalize the pixel values
+#X_train = X_train / 255.0
+#X_val = X_val / 255.0
+#X_test = reshaped_test / 255.0
 
 # Flatten the data for scaling
 X_train_flat = X_train.reshape(X_train.shape[0], -1)
 X_val_flat = X_val.reshape(X_val.shape[0], -1)
-X_test_flat = X_test.reshape(X_test.shape[0], -1)
+X_test_flat = reshaped_test.reshape(reshaped_test.shape[0], -1)
 
 # Standardize the data
 scaler = StandardScaler()
@@ -57,18 +59,18 @@ X_test_standardized = scaler.transform(X_test_flat)
 # Reshape back to original shape
 X_train_standardized = X_train_standardized.reshape(X_train.shape[0], IMG_SHAPE1, IMG_SHAPE2, 1)
 X_val_standardized = X_val_standardized.reshape(X_val.shape[0], IMG_SHAPE1, IMG_SHAPE2, 1)
-X_test_standardized = X_test_standardized.reshape(X_test.shape[0], IMG_SHAPE1, IMG_SHAPE2, 1)
+X_test_standardized = X_test_standardized.reshape(X_test_flat.shape[0], IMG_SHAPE1, IMG_SHAPE2, 1)
 
 # Data augmentation
-datagen = ImageDataGenerator(
-    rotation_range=10,
-    width_shift_range=0.1,
-    height_shift_range=0.1,
-    horizontal_flip=True
-)
+#datagen = ImageDataGenerator(
+#    rotation_range=10,
+#    width_shift_range=0.1,
+#    height_shift_range=0.1,
+#    horizontal_flip=True
+#)
 
 # Fit the generator on the training data
-datagen.fit(X_train_standardized)
+#datagen.fit(X_train_standardized)
 
 # Compute class weights
 class_weights_dict = class_weight.compute_class_weight('balanced', classes=np.unique(labels), y=labels)
@@ -79,23 +81,35 @@ def create_model(seed):
     # Set random seed for reproducibility
     np.random.seed(seed)
     tf.random.set_seed(seed)
-    
+
     model = Sequential([
-        Conv2D(64, kernel_size=(7, 7), activation='relu', input_shape=(IMG_SHAPE1, IMG_SHAPE2, 1)),
-        BatchNormalization(),
-        MaxPooling2D(pool_size=(2, 2)),
+        Conv2D(32, kernel_size=(11, 11), activation='relu', input_shape=(IMG_SHAPE1, IMG_SHAPE2, 1)),
+        #BatchNormalization(),
+        #MaxPooling2D(pool_size=(2, 2)),
+        #Dropout(0.1),
+
+        Conv2D(64, kernel_size=(7, 7), activation='relu'),
+        #BatchNormalization(),
+        #MaxPooling2D(pool_size=(2, 2)),
+        #Dropout(0.1),
+
+        #Conv2D(128, kernel_size=(5, 5), activation='relu'),
+
         Flatten(),
+        Dense(128, activation='relu', kernel_regularizer=L2(0.01)),
+        #BatchNormalization(),
+        #Dropout(0.3),
         Dense(64, activation='relu', kernel_regularizer=L2(0.01)),
-        BatchNormalization(),
-        Dense(64, activation='relu', kernel_regularizer=L2(0.01)),
+        #BatchNormalization(),
+        #Dropout(0.3),
         Dense(3, activation='softmax')
     ])
-    model.compile(optimizer=Adam(learning_rate=1e-4), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer=Adam(learning_rate=1e-5), loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     return model
 
 # Training ensemble models
-num_models = 5
-seeds = [43, 44, 45, 46, 47]
+num_models = 1
+seeds = [np.random.randint(0,1000)]
 val_accuracies = []
 ensemble_predictions = np.zeros((X_test_standardized.shape[0], 3))
 
@@ -103,18 +117,25 @@ for i in range(num_models):
     print(f"Training model {i + 1} with seed {seeds[i]}")
     model = create_model(seeds[i])
     reduce_lr_cb = ReduceLROnPlateau(monitor='val_accuracy', factor=0.1, patience=5, min_lr=1e-6, mode='max')
-    early_stopping_cb = EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True)
-    
-    history = model.fit(datagen.flow(X_train_standardized, y_train, batch_size=32),
-                        epochs=100, validation_data=(X_val_standardized, y_val), 
-                        class_weight=class_weights, callbacks=[reduce_lr_cb, early_stopping_cb])
-    
+    early_stopping_cb = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+
+    history = model.fit(X_train_standardized, y_train, batch_size=64,
+                        epochs=100, validation_data=(X_val_standardized, y_val),
+                        class_weight=class_weights, callbacks=[early_stopping_cb])
+
     val_loss, val_accuracy = model.evaluate(X_val_standardized, y_val)
     print(f"Validation Accuracy for model {i + 1}: {val_accuracy}")
     val_accuracies.append(val_accuracy)
-    
+
     # Predict on the test set
     predictions = model.predict(X_test_standardized)
+    partial_labels = np.argmax(predictions, axis=1)
+    if val_accuracy > 0.61:
+        np.savetxt(f'tmp_prediction_seed_{seeds[i]}.csv', predictions, delimiter=',', fmt='%f')
+
+        partial_submission = pd.DataFrame({'ID':test_df['ID'],'Label': partial_labels})
+        partial_submission.to_csv(f"tmp_submission_{seeds[i]}.csv",index=False)
+
     ensemble_predictions += predictions
 
 # Average ensemble predictions
@@ -130,3 +151,4 @@ submission_df.to_csv('cnn_submission_ensemble.csv', index=False)
 # Print final ensemble validation accuracies
 print(f"Ensemble validation accuracies: {val_accuracies}")
 print(f"Average validation accuracy: {np.mean(val_accuracies)}")
+print(f"Run with seed {seeds[i]}")
