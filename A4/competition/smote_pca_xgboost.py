@@ -15,6 +15,7 @@ from imblearn.over_sampling import SMOTE
 from sklearn.decomposition import PCA
 from sklearn.model_selection import GridSearchCV
 import xgboost as xgb
+import joblib
 
 # Set random seed for reproducibility
 seed_value = 42
@@ -30,9 +31,9 @@ train_pca_df = pd.read_csv(train_pca_file)
 test_pca_df = pd.read_csv(test_pca_file)
 
 # Split features and labels
-features = train_pca_df.drop(columns=['ID', 'Label']).values
+features = train_pca_df.drop(columns=['Label']).values
 labels = train_pca_df['Label'].values
-test_features = test_pca_df.drop(columns=['ID']).values
+test_features = test_pca_df.values
 
 # Standardize the data
 scaler = StandardScaler()
@@ -89,7 +90,6 @@ submission_df = pd.DataFrame({'ID': test_pca_df['ID'], 'Label': test_predictions
 submission_df.to_csv("submission.csv", index=False)
 
 # Save the best model using joblib
-import joblib
 joblib.dump(best_xgb_model, "best_xgb_model.pkl")
 
 print(f"Run with seed {seed_value} completed.")
